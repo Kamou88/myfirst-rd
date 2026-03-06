@@ -16,4 +16,6 @@ func (a *app) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/materials/", a.handleMaterialByID)
 	mux.HandleFunc("/api/device-types", a.handleDeviceTypes)
 	mux.HandleFunc("/api/device-types/", a.handleDeviceTypeByID)
+	mux.HandleFunc("/api/production-lines", a.handleProductionLines)
+	mux.HandleFunc("/api/production-lines/", a.handleProductionLineByID)
 }

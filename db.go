@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS device_types (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE
 );
+
+CREATE TABLE IF NOT EXISTS production_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS production_line_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  line_id INTEGER NOT NULL,
+  recipe_id INTEGER NOT NULL,
+  machine_count INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  FOREIGN KEY(line_id) REFERENCES production_lines(id) ON DELETE CASCADE,
+  FOREIGN KEY(recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+);
 `
 	_, err := db.Exec(schema)
 	return err

@@ -55,3 +55,20 @@ func (r deviceTypeRepository) Update(item deviceType) (deviceType, bool, error) 
 }
 func (r deviceTypeRepository) DeleteByID(id int) (bool, error)  { return deleteDeviceType(r.db, id) }
 func (r deviceTypeRepository) Exists(name string) (bool, error) { return deviceTypeExists(r.db, name) }
+
+type productionLineRepository struct {
+	db *sql.DB
+}
+
+func (r productionLineRepository) List() ([]productionLine, error) {
+	return listProductionLines(r.db)
+}
+func (r productionLineRepository) Create(item productionLine) (productionLine, error) {
+	return createProductionLine(r.db, item)
+}
+func (r productionLineRepository) Update(item productionLine) (productionLine, bool, error) {
+	return updateProductionLine(r.db, item)
+}
+func (r productionLineRepository) DeleteByID(id int) (bool, error) {
+	return deleteProductionLine(r.db, id)
+}

@@ -141,9 +141,51 @@ func (s deviceTypeService) Update(id int, payload deviceType) (deviceType, bool,
 }
 func (s deviceTypeService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }
 
+type productionLineService struct {
+	repo productionLineRepository
+}
+
+func (s productionLineService) List() ([]productionLine, error) { return s.repo.List() }
+func (s productionLineService) Create(payload productionLine) (productionLine, error) {
+	if err := validateProductionLine(payload); err != nil {
+		return productionLine{}, err
+	}
+	items := make([]productionLineItem, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		items = append(items, productionLineItem{
+			RecipeID:     item.RecipeID,
+			MachineCount: item.MachineCount,
+		})
+	}
+	return s.repo.Create(productionLine{
+		Name:  strings.TrimSpace(payload.Name),
+		Items: items,
+	})
+}
+func (s productionLineService) Update(id int, payload productionLine) (productionLine, bool, error) {
+	payload.ID = id
+	if err := validateProductionLine(payload); err != nil {
+		return productionLine{}, false, err
+	}
+	items := make([]productionLineItem, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		items = append(items, productionLineItem{
+			RecipeID:     item.RecipeID,
+			MachineCount: item.MachineCount,
+		})
+	}
+	return s.repo.Update(productionLine{
+		ID:    id,
+		Name:  strings.TrimSpace(payload.Name),
+		Items: items,
+	})
+}
+func (s productionLineService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }
+
 type appServices struct {
 	recipes     recipeService
 	devices     deviceService
 	materials   materialService
 	deviceTypes deviceTypeService
+	linePlans   productionLineService
 }

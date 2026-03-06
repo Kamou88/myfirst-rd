@@ -45,6 +45,9 @@ func main() {
 			deviceTypes: deviceTypeService{
 				repo: deviceTypeRepository{db: db},
 			},
+			linePlans: productionLineService{
+				repo: productionLineRepository{db: db},
+			},
 		},
 	}
 	application.registerRoutes(mux)

@@ -50,6 +50,18 @@ type deviceType struct {
 	Name string `json:"name"`
 }
 
+type productionLineItem struct {
+	ID           int `json:"id"`
+	RecipeID     int `json:"recipeId"`
+	MachineCount int `json:"machineCount"`
+}
+
+type productionLine struct {
+	ID    int                  `json:"id"`
+	Name  string               `json:"name"`
+	Items []productionLineItem `json:"items"`
+}
+
 type errText string
 
 func (e errText) Error() string {
