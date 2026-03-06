@@ -108,6 +108,7 @@ func (s materialService) Create(payload material) (material, error) {
 	return s.repo.Create(material{
 		Name:        strings.TrimSpace(payload.Name),
 		IsCraftable: payload.IsCraftable,
+		Rarity:      normalizeMaterialRarity(payload.Rarity),
 	})
 }
 func (s materialService) Update(id int, payload material) (material, bool, error) {
@@ -115,6 +116,7 @@ func (s materialService) Update(id int, payload material) (material, bool, error
 	if err := validateMaterial(payload); err != nil {
 		return material{}, false, err
 	}
+	payload.Rarity = normalizeMaterialRarity(payload.Rarity)
 	return s.repo.Update(payload)
 }
 func (s materialService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }

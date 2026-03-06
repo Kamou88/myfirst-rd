@@ -25,7 +25,7 @@ func listDevices(db *sql.DB) ([]device, error) {
 	rows, err := db.Query(`
 SELECT id, name, device_type, efficiency_percent, power_kw
 FROM devices
-ORDER BY id ASC
+ORDER BY device_type ASC, efficiency_percent ASC, id ASC
 `)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,28 @@ ORDER BY id ASC
 }
 
 func updateDevice(db *sql.DB, item device) (device, bool, error) {
-	res, err := db.Exec(
+	tx, err := db.Begin()
+	if err != nil {
+		return device{}, false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var oldItem device
+	if err = tx.QueryRow(
+		`SELECT id, name, device_type, efficiency_percent, power_kw FROM devices WHERE id = ?`,
+		item.ID,
+	).Scan(&oldItem.ID, &oldItem.Name, &oldItem.DeviceType, &oldItem.EfficiencyPercent, &oldItem.PowerKW); err != nil {
+		if err == sql.ErrNoRows {
+			return device{}, false, nil
+		}
+		return device{}, false, err
+	}
+
+	res, err := tx.Exec(
 		`UPDATE devices SET name = ?, device_type = ?, efficiency_percent = ?, power_kw = ? WHERE id = ?`,
 		item.Name, item.DeviceType, item.EfficiencyPercent, item.PowerKW, item.ID,
 	)
@@ -61,6 +82,19 @@ func updateDevice(db *sql.DB, item device) (device, bool, error) {
 	if err != nil {
 		return device{}, false, err
 	}
+	if affected == 0 {
+		_ = tx.Rollback()
+		return device{}, false, nil
+	}
+
+	if err = syncRecipesForDeviceTx(tx, oldItem, item); err != nil {
+		return device{}, false, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return device{}, false, err
+	}
+
 	return item, affected > 0, nil
 }
 

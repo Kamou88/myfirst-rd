@@ -5,8 +5,9 @@ type healthResponse struct {
 }
 
 type recipeMaterial struct {
-	Name   string  `json:"name"`
-	Amount float64 `json:"amount"`
+	MaterialID int     `json:"materialId,omitempty"`
+	Name       string  `json:"name"`
+	Amount     float64 `json:"amount"`
 }
 
 type recipe struct {
@@ -14,6 +15,7 @@ type recipe struct {
 	Name         string           `json:"name"`
 	MachineName  string           `json:"machineName"`
 	DeviceModel  string           `json:"deviceModel"`
+	DeviceID     int              `json:"deviceId,omitempty"`
 	CycleSeconds float64          `json:"cycleSeconds"`
 	PowerKW      float64          `json:"powerKW"`
 	CanSpeedup   bool             `json:"canSpeedup"`
@@ -40,6 +42,7 @@ type material struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`
 	IsCraftable bool   `json:"isCraftable"`
+	Rarity      string `json:"rarity"`
 }
 
 type deviceType struct {

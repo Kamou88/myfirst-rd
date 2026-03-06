@@ -6,7 +6,12 @@ import (
 )
 
 func createMaterial(db *sql.DB, item material) (material, error) {
-	res, err := db.Exec(`INSERT INTO materials (name, is_craftable) VALUES (?, ?)`, item.Name, boolToInt(item.IsCraftable))
+	res, err := db.Exec(
+		`INSERT INTO materials (name, is_craftable, rarity) VALUES (?, ?, ?)`,
+		item.Name,
+		boolToInt(item.IsCraftable),
+		normalizeMaterialRarity(item.Rarity),
+	)
 	if err != nil {
 		return material{}, err
 	}
@@ -20,9 +25,18 @@ func createMaterial(db *sql.DB, item material) (material, error) {
 
 func listMaterials(db *sql.DB) ([]material, error) {
 	rows, err := db.Query(`
-SELECT id, name, is_craftable
+SELECT id, name, is_craftable, rarity
 FROM materials
-ORDER BY id ASC
+ORDER BY
+  CASE rarity
+    WHEN '一般' THEN 1
+    WHEN '普通' THEN 2
+    WHEN '稀有' THEN 3
+    WHEN '史诗' THEN 4
+    WHEN '传说' THEN 5
+    ELSE 99
+  END ASC,
+  id ASC
 `)
 	if err != nil {
 		return nil, err
@@ -33,10 +47,11 @@ ORDER BY id ASC
 	for rows.Next() {
 		var item material
 		var isCraftable int
-		if err := rows.Scan(&item.ID, &item.Name, &isCraftable); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &isCraftable, &item.Rarity); err != nil {
 			return nil, err
 		}
 		item.IsCraftable = isCraftable != 0
+		item.Rarity = normalizeMaterialRarity(item.Rarity)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -47,8 +62,8 @@ ORDER BY id ASC
 
 func updateMaterial(db *sql.DB, item material) (material, bool, error) {
 	res, err := db.Exec(
-		`UPDATE materials SET name = ?, is_craftable = ? WHERE id = ?`,
-		item.Name, boolToInt(item.IsCraftable), item.ID,
+		`UPDATE materials SET name = ?, is_craftable = ?, rarity = ? WHERE id = ?`,
+		item.Name, boolToInt(item.IsCraftable), normalizeMaterialRarity(item.Rarity), item.ID,
 	)
 	if err != nil {
 		return material{}, false, err
@@ -76,5 +91,26 @@ func validateMaterial(item material) error {
 	if strings.TrimSpace(item.Name) == "" {
 		return errText("material name is required")
 	}
+	if err := validateMaterialRarity(item.Rarity); err != nil {
+		return err
+	}
 	return nil
+}
+
+func normalizeMaterialRarity(rarity string) string {
+	switch strings.TrimSpace(rarity) {
+	case "一般", "普通", "稀有", "史诗", "传说":
+		return strings.TrimSpace(rarity)
+	default:
+		return "一般"
+	}
+}
+
+func validateMaterialRarity(rarity string) error {
+	switch strings.TrimSpace(rarity) {
+	case "", "一般", "普通", "稀有", "史诗", "传说":
+		return nil
+	default:
+		return errText("rarity must be one of 一般, 普通, 稀有, 史诗, 传说")
+	}
 }

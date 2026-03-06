@@ -35,22 +35,26 @@ CREATE TABLE IF NOT EXISTS recipes (
   name TEXT NOT NULL,
   machine_name TEXT NOT NULL,
   device_model TEXT NOT NULL DEFAULT '',
+  device_id INTEGER,
   cycle_seconds REAL NOT NULL,
   power_kw REAL NOT NULL,
   can_speedup INTEGER NOT NULL DEFAULT 1,
   can_boost INTEGER NOT NULL DEFAULT 1,
   effect_mode TEXT NOT NULL DEFAULT 'speed',
-  booster_tier TEXT NOT NULL DEFAULT 'mk3'
+  booster_tier TEXT NOT NULL DEFAULT 'mk3',
+  FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS recipe_materials (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   recipe_id INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN ('input','output')),
+  material_id INTEGER,
   name TEXT NOT NULL,
   amount REAL NOT NULL,
   position INTEGER NOT NULL,
-  FOREIGN KEY(recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+  FOREIGN KEY(recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+  FOREIGN KEY(material_id) REFERENCES materials(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -64,7 +68,8 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS materials (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
-  is_craftable INTEGER NOT NULL DEFAULT 0
+  is_craftable INTEGER NOT NULL DEFAULT 0,
+  rarity TEXT NOT NULL DEFAULT '一般'
 );
 
 CREATE TABLE IF NOT EXISTS device_types (
@@ -103,6 +108,30 @@ func migrateSchema(db *sql.DB) error {
 
 	hasRecipeDeviceModel, err := tableHasColumn(db, "recipes", "device_model")
 	if err != nil {
+		return err
+	}
+
+	hasRecipeDeviceID, err := tableHasColumn(db, "recipes", "device_id")
+	if err != nil {
+		return err
+	}
+	if !hasRecipeDeviceID {
+		if _, err := db.Exec(`ALTER TABLE recipes ADD COLUMN device_id INTEGER`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`
+UPDATE recipes
+SET device_id = (
+  SELECT d.id
+  FROM devices d
+  WHERE d.name = recipes.device_model
+    AND d.device_type = recipes.machine_name
+  ORDER BY d.id ASC
+  LIMIT 1
+)
+WHERE device_id IS NULL
+`); err != nil {
 		return err
 	}
 	if !hasRecipeDeviceModel {
@@ -169,6 +198,42 @@ SELECT DISTINCT device_type FROM devices WHERE TRIM(device_type) <> ''
 		if _, err := db.Exec(`ALTER TABLE materials ADD COLUMN is_craftable INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
+	}
+
+	hasMaterialRarity, err := tableHasColumn(db, "materials", "rarity")
+	if err != nil {
+		return err
+	}
+	if !hasMaterialRarity {
+		if _, err := db.Exec(`ALTER TABLE materials ADD COLUMN rarity TEXT NOT NULL DEFAULT '一般'`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`UPDATE materials SET rarity = '一般' WHERE TRIM(rarity) = ''`); err != nil {
+		return err
+	}
+
+	hasRecipeMaterialID, err := tableHasColumn(db, "recipe_materials", "material_id")
+	if err != nil {
+		return err
+	}
+	if !hasRecipeMaterialID {
+		if _, err := db.Exec(`ALTER TABLE recipe_materials ADD COLUMN material_id INTEGER`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`
+UPDATE recipe_materials
+SET material_id = (
+  SELECT m.id
+  FROM materials m
+  WHERE m.name = recipe_materials.name
+  ORDER BY m.id ASC
+  LIMIT 1
+)
+WHERE material_id IS NULL
+`); err != nil {
+		return err
 	}
 	return nil
 }
