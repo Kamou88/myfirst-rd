@@ -13,6 +13,7 @@ func (a *app) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/devices", a.handleDevices)
 	mux.HandleFunc("/api/devices/", a.handleDeviceByID)
 	mux.HandleFunc("/api/materials", a.handleMaterials)
+	mux.HandleFunc("/api/materials/sync-raw", a.handleMaterialSyncRaw)
 	mux.HandleFunc("/api/materials/", a.handleMaterialByID)
 	mux.HandleFunc("/api/device-types", a.handleDeviceTypes)
 	mux.HandleFunc("/api/device-types/", a.handleDeviceTypeByID)

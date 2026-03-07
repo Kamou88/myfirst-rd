@@ -7,9 +7,10 @@ import (
 
 func createMaterial(db *sql.DB, item material) (material, error) {
 	res, err := db.Exec(
-		`INSERT INTO materials (name, is_craftable, rarity) VALUES (?, ?, ?)`,
+		`INSERT INTO materials (name, is_craftable, is_raw, rarity) VALUES (?, ?, ?, ?)`,
 		item.Name,
 		boolToInt(item.IsCraftable),
+		boolToInt(item.IsRaw),
 		normalizeMaterialRarity(item.Rarity),
 	)
 	if err != nil {
@@ -25,7 +26,7 @@ func createMaterial(db *sql.DB, item material) (material, error) {
 
 func listMaterials(db *sql.DB) ([]material, error) {
 	rows, err := db.Query(`
-SELECT id, name, is_craftable, rarity
+SELECT id, name, is_craftable, is_raw, rarity
 FROM materials
 ORDER BY
   CASE rarity
@@ -36,7 +37,8 @@ ORDER BY
     WHEN '传说' THEN 5
     ELSE 99
   END ASC,
-  id ASC
+  LENGTH(name) ASC,
+  name COLLATE NOCASE ASC
 `)
 	if err != nil {
 		return nil, err
@@ -47,10 +49,12 @@ ORDER BY
 	for rows.Next() {
 		var item material
 		var isCraftable int
-		if err := rows.Scan(&item.ID, &item.Name, &isCraftable, &item.Rarity); err != nil {
+		var isRaw int
+		if err := rows.Scan(&item.ID, &item.Name, &isCraftable, &isRaw, &item.Rarity); err != nil {
 			return nil, err
 		}
 		item.IsCraftable = isCraftable != 0
+		item.IsRaw = isRaw != 0
 		item.Rarity = normalizeMaterialRarity(item.Rarity)
 		items = append(items, item)
 	}
@@ -62,8 +66,8 @@ ORDER BY
 
 func updateMaterial(db *sql.DB, item material) (material, bool, error) {
 	res, err := db.Exec(
-		`UPDATE materials SET name = ?, is_craftable = ?, rarity = ? WHERE id = ?`,
-		item.Name, boolToInt(item.IsCraftable), normalizeMaterialRarity(item.Rarity), item.ID,
+		`UPDATE materials SET name = ?, is_craftable = ?, is_raw = ?, rarity = ? WHERE id = ?`,
+		item.Name, boolToInt(item.IsCraftable), boolToInt(item.IsRaw), normalizeMaterialRarity(item.Rarity), item.ID,
 	)
 	if err != nil {
 		return material{}, false, err
@@ -73,6 +77,10 @@ func updateMaterial(db *sql.DB, item material) (material, bool, error) {
 		return material{}, false, err
 	}
 	return item, affected > 0, nil
+}
+
+func syncMaterialRawFromRecipes(db *sql.DB) error {
+	return syncMaterialRawByRecipeInputs(db)
 }
 
 func deleteMaterial(db *sql.DB, id int) (bool, error) {

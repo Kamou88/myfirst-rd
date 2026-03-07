@@ -37,6 +37,20 @@ func (a *app) handleMaterials(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *app) handleMaterialSyncRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	items, err := a.services.materials.SyncRawByRecipeInputs()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to sync material raw flag: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(items)
+}
+
 func (a *app) handleMaterialByID(w http.ResponseWriter, r *http.Request) {
 	idText := strings.TrimPrefix(r.URL.Path, "/api/materials/")
 	id, err := strconv.Atoi(idText)

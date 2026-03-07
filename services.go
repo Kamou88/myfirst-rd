@@ -108,6 +108,7 @@ func (s materialService) Create(payload material) (material, error) {
 	return s.repo.Create(material{
 		Name:        strings.TrimSpace(payload.Name),
 		IsCraftable: payload.IsCraftable,
+		IsRaw:       payload.IsRaw,
 		Rarity:      normalizeMaterialRarity(payload.Rarity),
 	})
 }
@@ -120,6 +121,12 @@ func (s materialService) Update(id int, payload material) (material, bool, error
 	return s.repo.Update(payload)
 }
 func (s materialService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }
+func (s materialService) SyncRawByRecipeInputs() ([]material, error) {
+	if err := s.repo.SyncRawByRecipeInputs(); err != nil {
+		return nil, err
+	}
+	return s.repo.List()
+}
 
 type deviceTypeService struct {
 	repo deviceTypeRepository

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS materials (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
   is_craftable INTEGER NOT NULL DEFAULT 0,
+  is_raw INTEGER NOT NULL DEFAULT 0,
   rarity TEXT NOT NULL DEFAULT '一般'
 );
 
@@ -228,6 +229,16 @@ SELECT DISTINCT device_type FROM devices WHERE TRIM(device_type) <> ''
 		return err
 	}
 
+	hasMaterialIsRaw, err := tableHasColumn(db, "materials", "is_raw")
+	if err != nil {
+		return err
+	}
+	if !hasMaterialIsRaw {
+		if _, err := db.Exec(`ALTER TABLE materials ADD COLUMN is_raw INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+
 	hasRecipeMaterialID, err := tableHasColumn(db, "recipe_materials", "material_id")
 	if err != nil {
 		return err
@@ -247,6 +258,40 @@ SET material_id = (
   LIMIT 1
 )
 WHERE material_id IS NULL
+`); err != nil {
+		return err
+	}
+	if err := syncMaterialRawByRecipeInputs(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncMaterialRawByRecipeInputs(db *sql.DB) error {
+	if _, err := db.Exec(`UPDATE materials SET is_raw = 0`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+UPDATE materials
+SET is_raw = 1
+WHERE id IN (
+  SELECT DISTINCT rm.material_id
+  FROM recipe_materials rm
+  WHERE rm.kind = 'input' AND rm.material_id IS NOT NULL
+)
+`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`
+UPDATE materials
+SET is_raw = 1
+WHERE name IN (
+  SELECT DISTINCT TRIM(rm.name)
+  FROM recipe_materials rm
+  WHERE rm.kind = 'input'
+    AND (rm.material_id IS NULL OR rm.material_id = 0)
+    AND TRIM(rm.name) <> ''
+)
 `); err != nil {
 		return err
 	}

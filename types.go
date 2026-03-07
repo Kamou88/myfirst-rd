@@ -42,6 +42,7 @@ type material struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`
 	IsCraftable bool   `json:"isCraftable"`
+	IsRaw       bool   `json:"isRaw"`
 	Rarity      string `json:"rarity"`
 }
 

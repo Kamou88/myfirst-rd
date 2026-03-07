@@ -41,6 +41,9 @@ func (r materialRepository) Update(item material) (material, bool, error) {
 	return updateMaterial(r.db, item)
 }
 func (r materialRepository) DeleteByID(id int) (bool, error) { return deleteMaterial(r.db, id) }
+func (r materialRepository) SyncRawByRecipeInputs() error {
+	return syncMaterialRawFromRecipes(r.db)
+}
 
 type deviceTypeRepository struct {
 	db *sql.DB
