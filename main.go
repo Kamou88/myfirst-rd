@@ -48,6 +48,9 @@ func main() {
 			linePlans: productionLineService{
 				repo: productionLineRepository{db: db},
 			},
+			requirementPlans: requirementPlanService{
+				repo: requirementPlanRepository{db: db},
+			},
 		},
 	}
 	application.registerRoutes(mux)

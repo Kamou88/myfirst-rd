@@ -81,3 +81,20 @@ func (r productionLineRepository) Update(item productionLine) (productionLine, b
 func (r productionLineRepository) DeleteByID(id int) (bool, error) {
 	return deleteProductionLine(r.db, id)
 }
+
+type requirementPlanRepository struct {
+	db *sql.DB
+}
+
+func (r requirementPlanRepository) List() ([]requirementPlan, error) {
+	return listRequirementPlans(r.db)
+}
+func (r requirementPlanRepository) Create(item requirementPlan) (requirementPlan, error) {
+	return createRequirementPlan(r.db, item)
+}
+func (r requirementPlanRepository) Update(item requirementPlan) (requirementPlan, bool, error) {
+	return updateRequirementPlan(r.db, item)
+}
+func (r requirementPlanRepository) DeleteByID(id int) (bool, error) {
+	return deleteRequirementPlan(r.db, id)
+}

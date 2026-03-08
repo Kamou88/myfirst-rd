@@ -94,6 +94,20 @@ CREATE TABLE IF NOT EXISTS production_line_items (
   FOREIGN KEY(line_id) REFERENCES production_lines(id) ON DELETE CASCADE,
   FOREIGN KEY(recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS requirement_plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS requirement_plan_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  amount REAL NOT NULL,
+  position INTEGER NOT NULL,
+  FOREIGN KEY(plan_id) REFERENCES requirement_plans(id) ON DELETE CASCADE
+);
 `
 	_, err := db.Exec(schema)
 	return err

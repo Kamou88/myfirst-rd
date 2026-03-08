@@ -221,10 +221,52 @@ func (s productionLineService) Update(id int, payload productionLine) (productio
 }
 func (s productionLineService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }
 
+type requirementPlanService struct {
+	repo requirementPlanRepository
+}
+
+func (s requirementPlanService) List() ([]requirementPlan, error) { return s.repo.List() }
+func (s requirementPlanService) Create(payload requirementPlan) (requirementPlan, error) {
+	if err := validateRequirementPlan(payload); err != nil {
+		return requirementPlan{}, err
+	}
+	targets := make([]requirementPlanTarget, 0, len(payload.Targets))
+	for _, target := range payload.Targets {
+		targets = append(targets, requirementPlanTarget{
+			Name:   strings.TrimSpace(target.Name),
+			Amount: target.Amount,
+		})
+	}
+	return s.repo.Create(requirementPlan{
+		Name:    strings.TrimSpace(payload.Name),
+		Targets: targets,
+	})
+}
+func (s requirementPlanService) Update(id int, payload requirementPlan) (requirementPlan, bool, error) {
+	payload.ID = id
+	if err := validateRequirementPlan(payload); err != nil {
+		return requirementPlan{}, false, err
+	}
+	targets := make([]requirementPlanTarget, 0, len(payload.Targets))
+	for _, target := range payload.Targets {
+		targets = append(targets, requirementPlanTarget{
+			Name:   strings.TrimSpace(target.Name),
+			Amount: target.Amount,
+		})
+	}
+	return s.repo.Update(requirementPlan{
+		ID:      id,
+		Name:    strings.TrimSpace(payload.Name),
+		Targets: targets,
+	})
+}
+func (s requirementPlanService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }
+
 type appServices struct {
-	recipes     recipeService
-	devices     deviceService
-	materials   materialService
-	deviceTypes deviceTypeService
-	linePlans   productionLineService
+	recipes          recipeService
+	devices          deviceService
+	materials        materialService
+	deviceTypes      deviceTypeService
+	linePlans        productionLineService
+	requirementPlans requirementPlanService
 }

@@ -114,6 +114,18 @@ type productionLine struct {
 	Items []productionLineItem `json:"items"`
 }
 
+type requirementPlanTarget struct {
+	ID     int     `json:"id"`
+	Name   string  `json:"name"`
+	Amount float64 `json:"amount"`
+}
+
+type requirementPlan struct {
+	ID      int                     `json:"id"`
+	Name    string                  `json:"name"`
+	Targets []requirementPlanTarget `json:"targets"`
+}
+
 type errText string
 
 func (e errText) Error() string {
