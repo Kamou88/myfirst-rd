@@ -108,6 +108,23 @@ CREATE TABLE IF NOT EXISTS requirement_plan_targets (
   position INTEGER NOT NULL,
   FOREIGN KEY(plan_id) REFERENCES requirement_plans(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+  token TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 `
 	_, err := db.Exec(schema)
 	return err
@@ -301,6 +318,9 @@ WHERE material_id IS NULL
 		return err
 	}
 	if err := backfillRecipeBoosterVariants(db); err != nil {
+		return err
+	}
+	if err := ensureInitialAdminUser(db); err != nil {
 		return err
 	}
 	return nil

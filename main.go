@@ -31,6 +31,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	application := &app{
+		db: db,
 		services: appServices{
 			recipes: recipeService{
 				repo: recipeRepository{db: db},
