@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS recipes (
   power_kw REAL NOT NULL,
   can_speedup INTEGER NOT NULL DEFAULT 1,
   can_boost INTEGER NOT NULL DEFAULT 1,
+  is_researched INTEGER NOT NULL DEFAULT 0,
   effect_mode TEXT NOT NULL DEFAULT 'speed',
   booster_tier TEXT NOT NULL DEFAULT 'mk3',
   FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
@@ -62,7 +63,8 @@ CREATE TABLE IF NOT EXISTS devices (
   name TEXT NOT NULL,
   device_type TEXT NOT NULL DEFAULT '',
   efficiency_percent REAL NOT NULL,
-  power_kw REAL NOT NULL DEFAULT 0
+  power_kw REAL NOT NULL DEFAULT 0,
+  is_unlocked INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS materials (
@@ -114,6 +116,16 @@ func migrateSchema(db *sql.DB) error {
 	}
 	if !hasDeviceType {
 		if _, err := db.Exec(`ALTER TABLE devices ADD COLUMN device_type TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+
+	hasDeviceUnlocked, err := tableHasColumn(db, "devices", "is_unlocked")
+	if err != nil {
+		return err
+	}
+	if !hasDeviceUnlocked {
+		if _, err := db.Exec(`ALTER TABLE devices ADD COLUMN is_unlocked INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 	}
@@ -172,6 +184,16 @@ WHERE device_id IS NULL
 	}
 	if !hasCanBoost {
 		if _, err := db.Exec(`ALTER TABLE recipes ADD COLUMN can_boost INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return err
+		}
+	}
+
+	hasIsResearched, err := tableHasColumn(db, "recipes", "is_researched")
+	if err != nil {
+		return err
+	}
+	if !hasIsResearched {
+		if _, err := db.Exec(`ALTER TABLE recipes ADD COLUMN is_researched INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 	}
@@ -262,6 +284,9 @@ WHERE material_id IS NULL
 		return err
 	}
 	if err := syncMaterialRawByRecipeInputs(db); err != nil {
+		return err
+	}
+	if err := backfillRecipeBoosterVariants(db); err != nil {
 		return err
 	}
 	return nil

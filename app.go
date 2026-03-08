@@ -10,6 +10,7 @@ func (a *app) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", a.handleHealth)
 	mux.HandleFunc("/api/recipes", a.handleRecipes)
 	mux.HandleFunc("/api/recipes/", a.handleRecipeByID)
+	mux.HandleFunc("/api/requirements/calculate", a.handleRequirementCalculate)
 	mux.HandleFunc("/api/devices", a.handleDevices)
 	mux.HandleFunc("/api/devices/", a.handleDeviceByID)
 	mux.HandleFunc("/api/materials", a.handleMaterials)

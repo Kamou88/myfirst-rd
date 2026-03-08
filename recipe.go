@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
@@ -27,18 +28,20 @@ func createRecipesByDeviceType(db *sql.DB, item recipe) ([]recipe, error) {
 	created := make([]recipe, 0, len(devices))
 	for _, d := range devices {
 		base := recipe{
-			Name:         item.Name,
-			MachineName:  item.MachineName,
-			DeviceModel:  d.Name,
-			DeviceID:     d.ID,
-			CycleSeconds: item.CycleSeconds * 100 / d.EfficiencyPercent,
-			PowerKW:      d.PowerKW,
-			CanSpeedup:   item.CanSpeedup,
-			CanBoost:     item.CanBoost,
-			EffectMode:   "none",
-			BoosterTier:  "mk3",
-			Inputs:       cloneRecipeMaterials(item.Inputs),
-			Outputs:      cloneRecipeMaterials(item.Outputs),
+			Name:                    item.Name,
+			MachineName:             item.MachineName,
+			DeviceModel:             d.Name,
+			DeviceID:                d.ID,
+			DeviceEfficiencyPercent: d.EfficiencyPercent,
+			CycleSeconds:            item.CycleSeconds * 100 / d.EfficiencyPercent,
+			PowerKW:                 d.PowerKW,
+			CanSpeedup:              item.CanSpeedup,
+			CanBoost:                item.CanBoost,
+			IsResearched:            item.IsResearched,
+			EffectMode:              "none",
+			BoosterTier:             "mk3",
+			Inputs:                  cloneRecipeMaterials(item.Inputs),
+			Outputs:                 cloneRecipeMaterials(item.Outputs),
 		}
 		noneRecipe := applyBoosterTierToRecipe(base, "mk3")
 		savedNone, insertErr := insertRecipeTx(tx, noneRecipe)
@@ -48,25 +51,29 @@ func createRecipesByDeviceType(db *sql.DB, item recipe) ([]recipe, error) {
 		created = append(created, savedNone)
 
 		if base.CanSpeedup {
-			speedRecipe := base
-			speedRecipe.EffectMode = "speed"
-			speedRecipe = applyBoosterTierToRecipe(speedRecipe, "mk3")
-			saved, insertErr := insertRecipeTx(tx, speedRecipe)
-			if insertErr != nil {
-				return nil, insertErr
+			for _, tier := range []string{"mk1", "mk2", "mk3"} {
+				speedRecipe := base
+				speedRecipe.EffectMode = "speed"
+				speedRecipe = applyBoosterTierToRecipe(speedRecipe, tier)
+				saved, insertErr := insertRecipeTx(tx, speedRecipe)
+				if insertErr != nil {
+					return nil, insertErr
+				}
+				created = append(created, saved)
 			}
-			created = append(created, saved)
 		}
 
 		if base.CanBoost {
-			boostRecipe := base
-			boostRecipe.EffectMode = "boost"
-			boostRecipe = applyBoosterTierToRecipe(boostRecipe, "mk3")
-			saved, insertErr := insertRecipeTx(tx, boostRecipe)
-			if insertErr != nil {
-				return nil, insertErr
+			for _, tier := range []string{"mk1", "mk2", "mk3"} {
+				boostRecipe := base
+				boostRecipe.EffectMode = "boost"
+				boostRecipe = applyBoosterTierToRecipe(boostRecipe, tier)
+				saved, insertErr := insertRecipeTx(tx, boostRecipe)
+				if insertErr != nil {
+					return nil, insertErr
+				}
+				created = append(created, saved)
 			}
-			created = append(created, saved)
 		}
 	}
 
@@ -74,6 +81,269 @@ func createRecipesByDeviceType(db *sql.DB, item recipe) ([]recipe, error) {
 		return nil, err
 	}
 	return created, nil
+}
+
+type recipeSnapshot struct {
+	ID           int
+	Name         string
+	MachineName  string
+	DeviceModel  string
+	DeviceID     int
+	CycleSeconds float64
+	PowerKW      float64
+	CanSpeedup   bool
+	CanBoost     bool
+	IsResearched bool
+	EffectMode   string
+	BoosterTier  string
+}
+
+func backfillRecipeBoosterVariants(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	rows, err := tx.Query(`
+SELECT id, name, machine_name, COALESCE(device_model, ''), COALESCE(device_id, 0), cycle_seconds, power_kw, can_speedup, can_boost, is_researched, effect_mode, booster_tier
+FROM recipes
+ORDER BY id ASC
+`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	groupOrder := make([]string, 0)
+	grouped := make(map[string][]recipeSnapshot)
+	for rows.Next() {
+		var (
+			item         recipeSnapshot
+			canSpeedup   int
+			canBoost     int
+			isResearched int
+		)
+		if scanErr := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.MachineName,
+			&item.DeviceModel,
+			&item.DeviceID,
+			&item.CycleSeconds,
+			&item.PowerKW,
+			&canSpeedup,
+			&canBoost,
+			&isResearched,
+			&item.EffectMode,
+			&item.BoosterTier,
+		); scanErr != nil {
+			return scanErr
+		}
+		item.CanSpeedup = canSpeedup != 0
+		item.CanBoost = canBoost != 0
+		item.IsResearched = isResearched != 0
+
+		key := fmt.Sprintf("%s|%s|%d", item.Name, item.MachineName, item.DeviceID)
+		if _, ok := grouped[key]; !ok {
+			groupOrder = append(groupOrder, key)
+		}
+		grouped[key] = append(grouped[key], item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, key := range groupOrder {
+		if fillErr := ensureRecipeBoosterVariantsTx(tx, grouped[key]); fillErr != nil {
+			return fillErr
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureRecipeBoosterVariantsTx(tx *sql.Tx, group []recipeSnapshot) error {
+	if len(group) == 0 {
+		return nil
+	}
+
+	existing := map[string]map[string]bool{
+		"none":  {},
+		"speed": {},
+		"boost": {},
+	}
+	firstIDByEffect := make(map[string]int)
+	canSpeedup := false
+	canBoost := false
+	repID := group[0].ID
+
+	for _, item := range group {
+		effect := strings.ToLower(strings.TrimSpace(item.EffectMode))
+		if effect == "" {
+			effect = "none"
+		}
+		if _, ok := existing[effect]; !ok {
+			existing[effect] = make(map[string]bool)
+		}
+		existing[effect][normalizeBoosterTier(item.BoosterTier)] = true
+		if firstIDByEffect[effect] == 0 {
+			firstIDByEffect[effect] = item.ID
+		}
+		canSpeedup = canSpeedup || item.CanSpeedup
+		canBoost = canBoost || item.CanBoost
+	}
+
+	baseCache := make(map[string]recipe)
+	loadBase := func(effect string) (recipe, error) {
+		if cached, ok := baseCache[effect]; ok {
+			return cached, nil
+		}
+		sourceID := firstIDByEffect[effect]
+		if sourceID == 0 {
+			sourceID = firstIDByEffect["none"]
+		}
+		if sourceID == 0 {
+			sourceID = repID
+		}
+		source, err := loadRecipeWithMaterialsTx(tx, sourceID)
+		if err != nil {
+			return recipe{}, err
+		}
+		base := removeBoosterTierFromRecipe(source)
+		base.ID = 0
+		base.EffectMode = effect
+		base.BoosterTier = "mk3"
+		base.CanSpeedup = canSpeedup
+		base.CanBoost = canBoost
+		baseCache[effect] = base
+		return base, nil
+	}
+
+	if firstIDByEffect["none"] == 0 {
+		baseNone, err := loadBase("none")
+		if err != nil {
+			return err
+		}
+		baseNone.EffectMode = "none"
+		baseNone.BoosterTier = "mk3"
+		if _, err := insertRecipeTx(tx, baseNone); err != nil {
+			return err
+		}
+	}
+
+	if canSpeedup {
+		speedBase, err := loadBase("speed")
+		if err != nil {
+			return err
+		}
+		speedBase.EffectMode = "speed"
+		for _, tier := range []string{"mk1", "mk2", "mk3"} {
+			if existing["speed"][tier] {
+				continue
+			}
+			toInsert := applyBoosterTierToRecipe(speedBase, tier)
+			toInsert.ID = 0
+			if _, err := insertRecipeTx(tx, toInsert); err != nil {
+				return err
+			}
+		}
+	}
+
+	if canBoost {
+		boostBase, err := loadBase("boost")
+		if err != nil {
+			return err
+		}
+		boostBase.EffectMode = "boost"
+		for _, tier := range []string{"mk1", "mk2", "mk3"} {
+			if existing["boost"][tier] {
+				continue
+			}
+			toInsert := applyBoosterTierToRecipe(boostBase, tier)
+			toInsert.ID = 0
+			if _, err := insertRecipeTx(tx, toInsert); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func loadRecipeWithMaterialsTx(tx *sql.Tx, id int) (recipe, error) {
+	var (
+		item         recipe
+		canSpeedup   int
+		canBoost     int
+		isResearched int
+	)
+	if err := tx.QueryRow(`
+SELECT id, name, machine_name, device_model, COALESCE(device_id, 0), cycle_seconds, power_kw, can_speedup, can_boost, is_researched, effect_mode, booster_tier
+FROM recipes
+WHERE id = ?
+`, id).Scan(
+		&item.ID,
+		&item.Name,
+		&item.MachineName,
+		&item.DeviceModel,
+		&item.DeviceID,
+		&item.CycleSeconds,
+		&item.PowerKW,
+		&canSpeedup,
+		&canBoost,
+		&isResearched,
+		&item.EffectMode,
+		&item.BoosterTier,
+	); err != nil {
+		return recipe{}, err
+	}
+	item.CanSpeedup = canSpeedup != 0
+	item.CanBoost = canBoost != 0
+	item.IsResearched = isResearched != 0
+
+	rows, err := tx.Query(`
+SELECT rm.kind, COALESCE(m.name, rm.name), rm.amount, COALESCE(rm.material_id, 0)
+FROM recipe_materials rm
+LEFT JOIN materials m ON m.id = rm.material_id
+WHERE recipe_id = ?
+ORDER BY kind ASC, position ASC
+`, id)
+	if err != nil {
+		return recipe{}, err
+	}
+	defer rows.Close()
+
+	item.Inputs = make([]recipeMaterial, 0)
+	item.Outputs = make([]recipeMaterial, 0)
+	for rows.Next() {
+		var (
+			kind       string
+			name       string
+			amount     float64
+			materialID int
+		)
+		if err := rows.Scan(&kind, &name, &amount, &materialID); err != nil {
+			return recipe{}, err
+		}
+		mat := recipeMaterial{MaterialID: materialID, Name: name, Amount: amount}
+		if kind == "input" {
+			item.Inputs = append(item.Inputs, mat)
+		}
+		if kind == "output" {
+			item.Outputs = append(item.Outputs, mat)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return recipe{}, err
+	}
+	return item, nil
 }
 
 func listDevicesByTypeTx(tx *sql.Tx, deviceType string) ([]device, error) {
@@ -194,13 +464,29 @@ ORDER BY id ASC
 	return updatedItems, true, nil
 }
 
+func updateRecipeResearchStatus(db *sql.DB, id int, isResearched bool) (bool, error) {
+	res, err := db.Exec(
+		`UPDATE recipes SET is_researched = ? WHERE id = ?`,
+		boolToInt(isResearched), id,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func updateRecipeBoosterTierTx(tx *sql.Tx, id int, boosterTier string) (recipe, error) {
 	var err error
 	var item recipe
 	var canSpeedup int
 	var canBoost int
+	var isResearched int
 	if err = tx.QueryRow(`
-SELECT id, name, machine_name, device_model, device_id, cycle_seconds, power_kw, can_speedup, can_boost, effect_mode, booster_tier
+SELECT id, name, machine_name, device_model, device_id, cycle_seconds, power_kw, can_speedup, can_boost, is_researched, effect_mode, booster_tier
 FROM recipes
 WHERE id = ?
 `, id).Scan(
@@ -213,6 +499,7 @@ WHERE id = ?
 		&item.PowerKW,
 		&canSpeedup,
 		&canBoost,
+		&isResearched,
 		&item.EffectMode,
 		&item.BoosterTier,
 	); err != nil {
@@ -223,6 +510,7 @@ WHERE id = ?
 	}
 	item.CanSpeedup = canSpeedup != 0
 	item.CanBoost = canBoost != 0
+	item.IsResearched = isResearched != 0
 
 	rows, err := tx.Query(`
 SELECT rm.kind, COALESCE(m.name, rm.name), rm.amount, COALESCE(rm.material_id, 0)
@@ -260,15 +548,16 @@ ORDER BY kind ASC, position ASC
 	base := removeBoosterTierFromRecipe(item)
 	if item.EffectMode != "none" {
 		var (
-			noneID          int
-			noneCycle       float64
-			nonePower       float64
-			noneCanSpeedup  int
-			noneCanBoost    int
-			noneBoosterTier string
+			noneID           int
+			noneCycle        float64
+			nonePower        float64
+			noneCanSpeedup   int
+			noneCanBoost     int
+			noneIsResearched int
+			noneBoosterTier  string
 		)
 		err = tx.QueryRow(`
-SELECT id, cycle_seconds, power_kw, can_speedup, can_boost, booster_tier
+SELECT id, cycle_seconds, power_kw, can_speedup, can_boost, is_researched, booster_tier
 FROM recipes
 WHERE name = ? AND machine_name = ? AND device_id = ? AND effect_mode = 'none'
 LIMIT 1
@@ -278,6 +567,7 @@ LIMIT 1
 			&nonePower,
 			&noneCanSpeedup,
 			&noneCanBoost,
+			&noneIsResearched,
 			&noneBoosterTier,
 		)
 		if err != nil && err != sql.ErrNoRows {
@@ -328,6 +618,7 @@ ORDER BY kind ASC, position ASC
 				PowerKW:      nonePower,
 				CanSpeedup:   noneCanSpeedup != 0,
 				CanBoost:     noneCanBoost != 0,
+				IsResearched: noneIsResearched != 0,
 				EffectMode:   item.EffectMode,
 				BoosterTier:  normalizeBoosterTier(noneBoosterTier),
 				Inputs:       noneInputs,
@@ -377,8 +668,8 @@ ORDER BY kind ASC, position ASC
 
 func insertRecipeTx(tx *sql.Tx, item recipe) (recipe, error) {
 	res, err := tx.Exec(
-		`INSERT INTO recipes (name, machine_name, device_model, device_id, cycle_seconds, power_kw, can_speedup, can_boost, effect_mode, booster_tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.Name, item.MachineName, item.DeviceModel, nullableDeviceID(item.DeviceID), item.CycleSeconds, item.PowerKW, boolToInt(item.CanSpeedup), boolToInt(item.CanBoost), item.EffectMode, normalizeBoosterTier(item.BoosterTier),
+		`INSERT INTO recipes (name, machine_name, device_model, device_id, cycle_seconds, power_kw, can_speedup, can_boost, is_researched, effect_mode, booster_tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.Name, item.MachineName, item.DeviceModel, nullableDeviceID(item.DeviceID), item.CycleSeconds, item.PowerKW, boolToInt(item.CanSpeedup), boolToInt(item.CanBoost), boolToInt(item.IsResearched), item.EffectMode, normalizeBoosterTier(item.BoosterTier),
 	)
 	if err != nil {
 		return recipe{}, err
@@ -426,10 +717,13 @@ SELECT
   COALESCE(d.device_type, r.machine_name) AS machine_name,
   COALESCE(d.name, r.device_model) AS device_model,
   COALESCE(r.device_id, 0) AS device_id,
+  COALESCE(d.is_unlocked, 0) AS device_unlocked,
+  COALESCE(d.efficiency_percent, 100) AS device_efficiency_percent,
   r.cycle_seconds,
   r.power_kw,
   r.can_speedup,
   r.can_boost,
+  r.is_researched,
   r.effect_mode,
   r.booster_tier,
   rm.kind,
@@ -451,42 +745,48 @@ ORDER BY r.id ASC, rm.kind ASC, rm.position ASC
 	order := make([]int, 0)
 	for rows.Next() {
 		var (
-			id           int
-			name         string
-			machineName  string
-			deviceModel  string
-			deviceID     int
-			cycleSeconds float64
-			powerKW      float64
-			canSpeedup   int
-			canBoost     int
-			effectMode   string
-			boosterTier  string
-			kind         sql.NullString
-			materialName sql.NullString
-			amount       sql.NullFloat64
-			materialID   sql.NullInt64
+			id                      int
+			name                    string
+			machineName             string
+			deviceModel             string
+			deviceID                int
+			deviceUnlocked          int
+			deviceEfficiencyPercent float64
+			cycleSeconds            float64
+			powerKW                 float64
+			canSpeedup              int
+			canBoost                int
+			isResearched            int
+			effectMode              string
+			boosterTier             string
+			kind                    sql.NullString
+			materialName            sql.NullString
+			amount                  sql.NullFloat64
+			materialID              sql.NullInt64
 		)
-		if err := rows.Scan(&id, &name, &machineName, &deviceModel, &deviceID, &cycleSeconds, &powerKW, &canSpeedup, &canBoost, &effectMode, &boosterTier, &kind, &materialName, &amount, &materialID); err != nil {
+		if err := rows.Scan(&id, &name, &machineName, &deviceModel, &deviceID, &deviceUnlocked, &deviceEfficiencyPercent, &cycleSeconds, &powerKW, &canSpeedup, &canBoost, &isResearched, &effectMode, &boosterTier, &kind, &materialName, &amount, &materialID); err != nil {
 			return nil, err
 		}
 
 		item, ok := byID[id]
 		if !ok {
 			item = &recipe{
-				ID:           id,
-				Name:         name,
-				MachineName:  machineName,
-				DeviceModel:  deviceModel,
-				DeviceID:     deviceID,
-				CycleSeconds: cycleSeconds,
-				PowerKW:      powerKW,
-				CanSpeedup:   canSpeedup != 0,
-				CanBoost:     canBoost != 0,
-				EffectMode:   effectMode,
-				BoosterTier:  normalizeBoosterTier(boosterTier),
-				Inputs:       make([]recipeMaterial, 0),
-				Outputs:      make([]recipeMaterial, 0),
+				ID:                      id,
+				Name:                    name,
+				MachineName:             machineName,
+				DeviceModel:             deviceModel,
+				DeviceID:                deviceID,
+				DeviceUnlocked:          deviceUnlocked != 0,
+				DeviceEfficiencyPercent: deviceEfficiencyPercent,
+				CycleSeconds:            cycleSeconds,
+				PowerKW:                 powerKW,
+				CanSpeedup:              canSpeedup != 0,
+				CanBoost:                canBoost != 0,
+				IsResearched:            isResearched != 0,
+				EffectMode:              effectMode,
+				BoosterTier:             normalizeBoosterTier(boosterTier),
+				Inputs:                  make([]recipeMaterial, 0),
+				Outputs:                 make([]recipeMaterial, 0),
 			}
 			byID[id] = item
 			order = append(order, id)
@@ -547,8 +847,8 @@ func updateRecipe(db *sql.DB, item recipe) (recipe, bool, error) {
 	}
 
 	res, err := tx.Exec(
-		`UPDATE recipes SET name = ?, machine_name = ?, cycle_seconds = ?, power_kw = ?, can_speedup = ?, can_boost = ?, effect_mode = ?, booster_tier = ? WHERE id = ?`,
-		item.Name, item.MachineName, item.CycleSeconds, item.PowerKW, boolToInt(item.CanSpeedup), boolToInt(item.CanBoost), item.EffectMode, normalizeBoosterTier(item.BoosterTier), item.ID,
+		`UPDATE recipes SET name = ?, machine_name = ?, cycle_seconds = ?, power_kw = ?, can_speedup = ?, can_boost = ?, is_researched = ?, effect_mode = ?, booster_tier = ? WHERE id = ?`,
+		item.Name, item.MachineName, item.CycleSeconds, item.PowerKW, boolToInt(item.CanSpeedup), boolToInt(item.CanBoost), boolToInt(item.IsResearched), item.EffectMode, normalizeBoosterTier(item.BoosterTier), item.ID,
 	)
 	if err != nil {
 		return recipe{}, false, err

@@ -26,6 +26,10 @@ func createProductionLine(db *sql.DB, item productionLine) (productionLine, erro
 	}
 	item.ID = int(id64)
 
+	if err = ensureResearchedRecipesTx(tx, item.Items); err != nil {
+		return productionLine{}, err
+	}
+
 	for i, lineItem := range item.Items {
 		if _, err = tx.Exec(
 			`INSERT INTO production_line_items (line_id, recipe_id, machine_count, position) VALUES (?, ?, ?, ?)`,
@@ -129,6 +133,11 @@ func updateProductionLine(db *sql.DB, item productionLine) (productionLine, bool
 	if _, err = tx.Exec(`DELETE FROM production_line_items WHERE line_id = ?`, item.ID); err != nil {
 		return productionLine{}, false, err
 	}
+
+	if err = ensureResearchedRecipesTx(tx, item.Items); err != nil {
+		return productionLine{}, false, err
+	}
+
 	for i, lineItem := range item.Items {
 		if _, err = tx.Exec(
 			`INSERT INTO production_line_items (line_id, recipe_id, machine_count, position) VALUES (?, ?, ?, ?)`,
@@ -169,6 +178,39 @@ func validateProductionLine(item productionLine) error {
 		}
 		if lineItem.MachineCount <= 0 {
 			return errText("machineCount must be greater than 0")
+		}
+	}
+	return nil
+}
+
+func ensureResearchedRecipesTx(tx *sql.Tx, items []productionLineItem) error {
+	checked := make(map[int]struct{})
+	for _, lineItem := range items {
+		if _, ok := checked[lineItem.RecipeID]; ok {
+			continue
+		}
+		checked[lineItem.RecipeID] = struct{}{}
+
+		var (
+			isResearched   int
+			deviceUnlocked int
+		)
+		if err := tx.QueryRow(`
+SELECT r.is_researched, COALESCE(d.is_unlocked, 0)
+FROM recipes r
+LEFT JOIN devices d ON d.id = r.device_id
+WHERE r.id = ?
+`, lineItem.RecipeID).Scan(&isResearched, &deviceUnlocked); err != nil {
+			if err == sql.ErrNoRows {
+				return errText("recipe not found")
+			}
+			return err
+		}
+		if isResearched == 0 {
+			return errText("only researched recipes can be selected")
+		}
+		if deviceUnlocked == 0 {
+			return errText("only recipes with unlocked devices can be selected")
 		}
 	}
 	return nil

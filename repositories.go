@@ -17,6 +17,9 @@ func (r recipeRepository) DeleteByID(id int) (bool, error) { return deleteRecipe
 func (r recipeRepository) UpdateBooster(id int, boosterTier string) ([]recipe, bool, error) {
 	return updateRecipeBoosterTier(r.db, id, boosterTier)
 }
+func (r recipeRepository) UpdateResearch(id int, isResearched bool) (bool, error) {
+	return updateRecipeResearchStatus(r.db, id, isResearched)
+}
 
 type deviceRepository struct {
 	db *sql.DB
@@ -28,6 +31,9 @@ func (r deviceRepository) Update(item device) (device, bool, error) {
 	return updateDevice(r.db, item)
 }
 func (r deviceRepository) DeleteByID(id int) (bool, error) { return deleteDevice(r.db, id) }
+func (r deviceRepository) UpdateUnlock(id int, isUnlocked bool) (bool, error) {
+	return updateDeviceUnlockStatus(r.db, id, isUnlocked)
+}
 
 type materialRepository struct {
 	db *sql.DB

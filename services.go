@@ -19,6 +19,7 @@ func (s recipeService) Create(payload recipe) ([]recipe, error) {
 		PowerKW:      payload.PowerKW,
 		CanSpeedup:   payload.CanSpeedup,
 		CanBoost:     payload.CanBoost,
+		IsResearched: payload.IsResearched,
 		EffectMode:   "",
 		Inputs:       sanitizeMaterials(payload.Inputs),
 		Outputs:      sanitizeMaterials(payload.Outputs),
@@ -38,6 +39,7 @@ func (s recipeService) ReplaceGroup(id int, payload recipe) ([]recipe, bool, err
 		PowerKW:      payload.PowerKW,
 		CanSpeedup:   payload.CanSpeedup,
 		CanBoost:     payload.CanBoost,
+		IsResearched: payload.IsResearched,
 		EffectMode:   "",
 		Inputs:       sanitizeMaterials(payload.Inputs),
 		Outputs:      sanitizeMaterials(payload.Outputs),
@@ -51,6 +53,32 @@ func (s recipeService) UpdateBooster(id int, boosterTier string) ([]recipe, bool
 		return nil, false, err
 	}
 	return s.repo.UpdateBooster(id, boosterTier)
+}
+
+func (s recipeService) UpdateResearch(id int, isResearched bool) (bool, error) {
+	return s.repo.UpdateResearch(id, isResearched)
+}
+
+func (s recipeService) CalculateRequirements(payload requirementCalculatePayload) (requirementCalculateResponse, error) {
+	allRecipes, err := s.repo.List()
+	if err != nil {
+		return requirementCalculateResponse{}, err
+	}
+
+	eligibleRecipes := make([]recipe, 0, len(allRecipes))
+	for _, item := range allRecipes {
+		if item.IsResearched && item.DeviceUnlocked {
+			eligibleRecipes = append(eligibleRecipes, item)
+		}
+	}
+	if len(eligibleRecipes) == 0 {
+		return requirementCalculateResponse{}, errText("当前没有“已研究且设备已解锁”的配方，无法参与需求计算")
+	}
+
+	return requirementCalculateResponse{
+		MinPower: calculateRequirementPlan(payload.Targets, eligibleRecipes, "min_power"),
+		MinRaw:   calculateRequirementPlan(payload.Targets, eligibleRecipes, "min_raw"),
+	}, nil
 }
 
 type deviceService struct {
@@ -76,6 +104,7 @@ func (s deviceService) Create(payload device) (device, error) {
 		DeviceType:        strings.TrimSpace(payload.DeviceType),
 		EfficiencyPercent: payload.EfficiencyPercent,
 		PowerKW:           payload.PowerKW,
+		IsUnlocked:        payload.IsUnlocked,
 	})
 }
 
@@ -95,6 +124,9 @@ func (s deviceService) Update(id int, payload device) (device, bool, error) {
 }
 
 func (s deviceService) Delete(id int) (bool, error) { return s.repo.DeleteByID(id) }
+func (s deviceService) UpdateUnlock(id int, isUnlocked bool) (bool, error) {
+	return s.repo.UpdateUnlock(id, isUnlocked)
+}
 
 type materialService struct {
 	repo materialRepository

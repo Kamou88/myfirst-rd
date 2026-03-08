@@ -38,10 +38,23 @@ func (a *app) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
-	idText := strings.TrimPrefix(r.URL.Path, "/api/devices/")
-	id, err := strconv.Atoi(idText)
+	pathText := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/devices/"), "/")
+	parts := strings.Split(pathText, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		http.Error(w, "invalid device id", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.Atoi(parts[0])
 	if err != nil {
 		http.Error(w, "invalid device id", http.StatusBadRequest)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "unlock" {
+		a.handleDeviceUnlock(w, r, id)
+		return
+	}
+	if len(parts) != 1 {
+		http.Error(w, "invalid device path", http.StatusBadRequest)
 		return
 	}
 
@@ -77,4 +90,26 @@ func (a *app) handleDeviceByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *app) handleDeviceUnlock(w http.ResponseWriter, r *http.Request, id int) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload deviceUnlockPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	ok, err := a.services.devices.UpdateUnlock(id, payload.IsUnlocked)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "device not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

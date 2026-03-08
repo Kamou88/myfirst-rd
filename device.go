@@ -7,8 +7,8 @@ import (
 
 func createDevice(db *sql.DB, item device) (device, error) {
 	res, err := db.Exec(
-		`INSERT INTO devices (name, device_type, efficiency_percent, power_kw) VALUES (?, ?, ?, ?)`,
-		item.Name, item.DeviceType, item.EfficiencyPercent, item.PowerKW,
+		`INSERT INTO devices (name, device_type, efficiency_percent, power_kw, is_unlocked) VALUES (?, ?, ?, ?, ?)`,
+		item.Name, item.DeviceType, item.EfficiencyPercent, item.PowerKW, boolToInt(item.IsUnlocked),
 	)
 	if err != nil {
 		return device{}, err
@@ -23,7 +23,7 @@ func createDevice(db *sql.DB, item device) (device, error) {
 
 func listDevices(db *sql.DB) ([]device, error) {
 	rows, err := db.Query(`
-SELECT id, name, device_type, efficiency_percent, power_kw
+SELECT id, name, device_type, efficiency_percent, power_kw, is_unlocked
 FROM devices
 ORDER BY device_type ASC, efficiency_percent ASC, id ASC
 `)
@@ -35,9 +35,11 @@ ORDER BY device_type ASC, efficiency_percent ASC, id ASC
 	items := make([]device, 0)
 	for rows.Next() {
 		var item device
-		if err := rows.Scan(&item.ID, &item.Name, &item.DeviceType, &item.EfficiencyPercent, &item.PowerKW); err != nil {
+		var isUnlocked int
+		if err := rows.Scan(&item.ID, &item.Name, &item.DeviceType, &item.EfficiencyPercent, &item.PowerKW, &isUnlocked); err != nil {
 			return nil, err
 		}
+		item.IsUnlocked = isUnlocked != 0
 		if strings.TrimSpace(item.DeviceType) == "" {
 			item.DeviceType = "未分类"
 		}
@@ -61,19 +63,21 @@ func updateDevice(db *sql.DB, item device) (device, bool, error) {
 	}()
 
 	var oldItem device
+	var oldUnlocked int
 	if err = tx.QueryRow(
-		`SELECT id, name, device_type, efficiency_percent, power_kw FROM devices WHERE id = ?`,
+		`SELECT id, name, device_type, efficiency_percent, power_kw, is_unlocked FROM devices WHERE id = ?`,
 		item.ID,
-	).Scan(&oldItem.ID, &oldItem.Name, &oldItem.DeviceType, &oldItem.EfficiencyPercent, &oldItem.PowerKW); err != nil {
+	).Scan(&oldItem.ID, &oldItem.Name, &oldItem.DeviceType, &oldItem.EfficiencyPercent, &oldItem.PowerKW, &oldUnlocked); err != nil {
 		if err == sql.ErrNoRows {
 			return device{}, false, nil
 		}
 		return device{}, false, err
 	}
+	oldItem.IsUnlocked = oldUnlocked != 0
 
 	res, err := tx.Exec(
-		`UPDATE devices SET name = ?, device_type = ?, efficiency_percent = ?, power_kw = ? WHERE id = ?`,
-		item.Name, item.DeviceType, item.EfficiencyPercent, item.PowerKW, item.ID,
+		`UPDATE devices SET name = ?, device_type = ?, efficiency_percent = ?, power_kw = ?, is_unlocked = ? WHERE id = ?`,
+		item.Name, item.DeviceType, item.EfficiencyPercent, item.PowerKW, boolToInt(item.IsUnlocked), item.ID,
 	)
 	if err != nil {
 		return device{}, false, err
@@ -96,6 +100,18 @@ func updateDevice(db *sql.DB, item device) (device, bool, error) {
 	}
 
 	return item, affected > 0, nil
+}
+
+func updateDeviceUnlockStatus(db *sql.DB, id int, isUnlocked bool) (bool, error) {
+	res, err := db.Exec(`UPDATE devices SET is_unlocked = ? WHERE id = ?`, boolToInt(isUnlocked), id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
 }
 
 func deleteDevice(db *sql.DB, id int) (bool, error) {
