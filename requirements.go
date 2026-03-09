@@ -24,6 +24,12 @@ type machineAllocation struct {
 	count  int
 }
 
+type materialSelection struct {
+	name  string
+	need  float64
+	depth int
+}
+
 func perMinute(amount float64, cycleSeconds float64) float64 {
 	if cycleSeconds <= 0 {
 		return 0
@@ -186,6 +192,80 @@ func abs(v float64) float64 {
 	return v
 }
 
+func materialDependencyDepth(
+	material string,
+	optionsByMaterial map[string][]requirementOption,
+	memo map[string]int,
+	visiting map[string]bool,
+) int {
+	if depth, ok := memo[material]; ok {
+		return depth
+	}
+	if visiting[material] {
+		return 0
+	}
+	options := optionsByMaterial[material]
+	if len(options) == 0 {
+		memo[material] = 0
+		return 0
+	}
+
+	visiting[material] = true
+	best := 1
+	for _, option := range options {
+		optionDepth := 1
+		for _, input := range option.recipe.Inputs {
+			inputName := strings.TrimSpace(input.Name)
+			if inputName == "" {
+				continue
+			}
+			if _, ok := optionsByMaterial[inputName]; !ok {
+				continue
+			}
+			depth := materialDependencyDepth(inputName, optionsByMaterial, memo, visiting) + 1
+			if depth > optionDepth {
+				optionDepth = depth
+			}
+		}
+		if optionDepth > best {
+			best = optionDepth
+		}
+	}
+	delete(visiting, material)
+	memo[material] = best
+	return best
+}
+
+func chooseRequiredMaterial(
+	requirement map[string]float64,
+	optionsByMaterial map[string][]requirementOption,
+	depthMemo map[string]int,
+) (materialSelection, bool) {
+	best := materialSelection{}
+	found := false
+	for name, need := range requirement {
+		if need <= requirementEPS {
+			continue
+		}
+		if _, ok := optionsByMaterial[name]; !ok {
+			continue
+		}
+		candidate := materialSelection{
+			name:  name,
+			need:  need,
+			depth: materialDependencyDepth(name, optionsByMaterial, depthMemo, map[string]bool{}),
+		}
+		if !found ||
+			candidate.depth > best.depth ||
+			(candidate.depth == best.depth && candidate.need > best.need+requirementEPS) ||
+			(candidate.depth == best.depth && abs(candidate.need-best.need) <= requirementEPS && candidate.name < best.name) {
+			best = candidate
+			found = true
+		}
+	}
+	return best, found
+}
+
 func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, strategy string) requirementPlanResult {
 	requirement := make(map[string]float64)
 	for _, target := range targets {
@@ -197,6 +277,7 @@ func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, str
 	}
 
 	optionsByMaterial := buildRequirementOptionsByMaterial(recipes)
+	depthMemo := make(map[string]int)
 	machineByRecipeID := make(map[int]int)
 	recipeByID := make(map[int]recipe, len(recipes))
 	for _, item := range recipes {
@@ -207,29 +288,19 @@ func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, str
 	steps := 0
 	for steps < requirementMaxSteps {
 		steps++
-		selectedMaterial := ""
-		selectedNeed := 0.0
-		for name, value := range requirement {
-			if value > requirementEPS {
-				if _, ok := optionsByMaterial[name]; ok {
-					selectedMaterial = name
-					selectedNeed = value
-					break
-				}
-			}
-		}
-		if selectedMaterial == "" {
+		selected, ok := chooseRequiredMaterial(requirement, optionsByMaterial, depthMemo)
+		if !ok || selected.name == "" {
 			break
 		}
 
-		picked, ok := chooseRequirementOption(optionsByMaterial[selectedMaterial], strategy)
+		picked, ok := chooseRequirementOption(optionsByMaterial[selected.name], strategy)
 		if !ok || picked.outRate <= requirementEPS {
 			break
 		}
 		allocations := buildIntegerAllocations(
-			selectedNeed,
+			selected.need,
 			picked,
-			optionsByMaterial[selectedMaterial],
+			optionsByMaterial[selected.name],
 			strategy,
 		)
 		for _, alloc := range allocations {
