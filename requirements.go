@@ -30,6 +30,12 @@ type materialSelection struct {
 	depth int
 }
 
+type requirementPlanCandidate struct {
+	requirement     map[string]float64
+	machineByRecipe map[int]int
+	hitStepLimit    bool
+}
+
 func perMinute(amount float64, cycleSeconds float64) float64 {
 	if cycleSeconds <= 0 {
 		return 0
@@ -266,7 +272,7 @@ func chooseRequiredMaterial(
 	return best, found
 }
 
-func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, strategy string) requirementPlanResult {
+func buildRequirementMap(targets []requirementTarget) map[string]float64 {
 	requirement := make(map[string]float64)
 	for _, target := range targets {
 		name := strings.TrimSpace(target.Name)
@@ -275,16 +281,47 @@ func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, str
 		}
 		requirement[name] += target.Amount
 	}
+	return requirement
+}
 
-	optionsByMaterial := buildRequirementOptionsByMaterial(recipes)
-	depthMemo := make(map[string]int)
+func applyRecipeCount(requirement map[string]float64, machineByRecipe map[int]int, item recipe, count int) {
+	if count <= 0 {
+		return
+	}
+	machineByRecipe[item.ID] += count
+	for _, output := range item.Outputs {
+		outputRate := perMinute(output.Amount, item.CycleSeconds)
+		requirement[output.Name] = requirement[output.Name] - outputRate*float64(count)
+	}
+	for _, input := range item.Inputs {
+		inputRate := perMinute(input.Amount, item.CycleSeconds)
+		requirement[input.Name] = requirement[input.Name] + inputRate*float64(count)
+	}
+}
+
+func solveRequirementCandidate(
+	targets []requirementTarget,
+	allRecipes []recipe,
+	greedyRecipes []recipe,
+	seedCounts map[int]int,
+	strategy string,
+) requirementPlanCandidate {
+	requirement := buildRequirementMap(targets)
 	machineByRecipeID := make(map[int]int)
-	recipeByID := make(map[int]recipe, len(recipes))
-	for _, item := range recipes {
+	recipeByID := make(map[int]recipe, len(allRecipes))
+	for _, item := range allRecipes {
 		recipeByID[item.ID] = item
 	}
-	warnings := make([]string, 0)
+	for recipeID, count := range seedCounts {
+		item, ok := recipeByID[recipeID]
+		if !ok {
+			continue
+		}
+		applyRecipeCount(requirement, machineByRecipeID, item, count)
+	}
 
+	optionsByMaterial := buildRequirementOptionsByMaterial(greedyRecipes)
+	depthMemo := make(map[string]int)
 	steps := 0
 	for steps < requirementMaxSteps {
 		steps++
@@ -307,27 +344,210 @@ func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, str
 			if alloc.count <= 0 {
 				continue
 			}
-			machineByRecipeID[alloc.option.recipe.ID] += alloc.count
-			for _, output := range alloc.option.recipe.Outputs {
-				outputRate := perMinute(output.Amount, alloc.option.recipe.CycleSeconds)
-				requirement[output.Name] = requirement[output.Name] - outputRate*float64(alloc.count)
-			}
-			for _, input := range alloc.option.recipe.Inputs {
-				inputRate := perMinute(input.Amount, alloc.option.recipe.CycleSeconds)
-				requirement[input.Name] = requirement[input.Name] + inputRate*float64(alloc.count)
-			}
+			applyRecipeCount(requirement, machineByRecipeID, alloc.option.recipe, alloc.count)
 		}
 	}
 
-	if steps >= requirementMaxSteps {
+	return requirementPlanCandidate{
+		requirement:     requirement,
+		machineByRecipe: machineByRecipeID,
+		hitStepLimit:    steps >= requirementMaxSteps,
+	}
+}
+
+func buildClosureMaterials(targets []requirementTarget, optionsByMaterial map[string][]requirementOption) map[string]bool {
+	seen := make(map[string]bool)
+	queue := make([]string, 0, len(targets))
+	for _, target := range targets {
+		name := strings.TrimSpace(target.Name)
+		if name != "" {
+			queue = append(queue, name)
+		}
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		for _, option := range optionsByMaterial[name] {
+			for _, input := range option.recipe.Inputs {
+				inputName := strings.TrimSpace(input.Name)
+				if inputName != "" && !seen[inputName] {
+					queue = append(queue, inputName)
+				}
+			}
+		}
+	}
+	return seen
+}
+
+func isMultiOutputRecipe(item recipe) bool {
+	seen := make(map[string]bool)
+	count := 0
+	for _, output := range item.Outputs {
+		name := strings.TrimSpace(output.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		count++
+		if count > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func candidateMetrics(
+	candidate requirementPlanCandidate,
+	recipeByID map[int]recipe,
+	allOptionsByMaterial map[string][]requirementOption,
+) (valid bool, waste float64, totalPower float64, totalExternal float64) {
+	valid = true
+	for name, need := range candidate.requirement {
+		if need > requirementEPS {
+			if _, ok := allOptionsByMaterial[name]; ok {
+				valid = false
+			} else {
+				totalExternal += need
+			}
+		}
+		if need < -requirementEPS {
+			waste += -need
+		}
+	}
+	for recipeID, machineCount := range candidate.machineByRecipe {
+		if machineCount <= 0 {
+			continue
+		}
+		item, ok := recipeByID[recipeID]
+		if !ok {
+			continue
+		}
+		totalPower += item.PowerKW * float64(machineCount)
+	}
+	return valid, waste, totalPower, totalExternal
+}
+
+func isBetterCandidate(
+	best requirementPlanCandidate,
+	next requirementPlanCandidate,
+	recipeByID map[int]recipe,
+	allOptionsByMaterial map[string][]requirementOption,
+	strategy string,
+) bool {
+	bestValid, bestWaste, bestPower, bestExternal := candidateMetrics(best, recipeByID, allOptionsByMaterial)
+	nextValid, nextWaste, nextPower, nextExternal := candidateMetrics(next, recipeByID, allOptionsByMaterial)
+	if nextValid != bestValid {
+		return nextValid
+	}
+	if nextWaste < bestWaste-requirementEPS {
+		return true
+	}
+	if abs(nextWaste-bestWaste) > requirementEPS {
+		return false
+	}
+	if strategy == "min_power" {
+		if nextPower < bestPower-requirementEPS {
+			return true
+		}
+		if abs(nextPower-bestPower) > requirementEPS {
+			return false
+		}
+		return nextExternal < bestExternal-requirementEPS
+	}
+	if nextExternal < bestExternal-requirementEPS {
+		return true
+	}
+	if abs(nextExternal-bestExternal) > requirementEPS {
+		return false
+	}
+	return nextPower < bestPower-requirementEPS
+}
+
+func optimizeByproductCandidates(targets []requirementTarget, recipes []recipe, strategy string) requirementPlanCandidate {
+	allOptionsByMaterial := buildRequirementOptionsByMaterial(recipes)
+	relevantMaterials := buildClosureMaterials(targets, allOptionsByMaterial)
+	multiRecipes := make([]recipe, 0)
+	singleRecipes := make([]recipe, 0, len(recipes))
+	for _, item := range recipes {
+		if isMultiOutputRecipe(item) {
+			relevant := false
+			for _, output := range item.Outputs {
+				name := strings.TrimSpace(output.Name)
+				if name != "" && relevantMaterials[name] {
+					relevant = true
+					break
+				}
+			}
+			if relevant {
+				multiRecipes = append(multiRecipes, item)
+				continue
+			}
+		}
+		singleRecipes = append(singleRecipes, item)
+	}
+
+	best := solveRequirementCandidate(targets, recipes, recipes, nil, strategy)
+	if len(multiRecipes) == 0 || len(multiRecipes) > 5 {
+		return best
+	}
+
+	recipeByID := make(map[int]recipe, len(recipes))
+	for _, item := range recipes {
+		recipeByID[item.ID] = item
+	}
+	counts := make(map[int]int)
+	var dfs func(idx int)
+	dfs = func(idx int) {
+		if idx >= len(multiRecipes) {
+			candidate := solveRequirementCandidate(targets, recipes, singleRecipes, counts, strategy)
+			if isBetterCandidate(best, candidate, recipeByID, allOptionsByMaterial, strategy) {
+				best = candidate
+			}
+			return
+		}
+		item := multiRecipes[idx]
+		baseCount := best.machineByRecipe[item.ID]
+		maxCount := baseCount + 6
+		if maxCount < 6 {
+			maxCount = 6
+		}
+		if maxCount > 24 {
+			maxCount = 24
+		}
+		for count := 0; count <= maxCount; count++ {
+			counts[item.ID] = count
+			dfs(idx + 1)
+		}
+		delete(counts, item.ID)
+	}
+	dfs(0)
+	return best
+}
+
+func summarizeCandidate(
+	candidate requirementPlanCandidate,
+	recipes []recipe,
+	optionsByMaterial map[string][]requirementOption,
+) requirementPlanResult {
+	warnings := make([]string, 0)
+	if candidate.hitStepLimit {
 		warnings = append(warnings, "计算步数达到上限，可能存在循环依赖，请检查配方关系。")
 	}
 
-	recipeRows := make([]requirementRecipeRow, 0, len(machineByRecipeID))
+	recipeByID := make(map[int]recipe, len(recipes))
+	for _, item := range recipes {
+		recipeByID[item.ID] = item
+	}
+
+	recipeRows := make([]requirementRecipeRow, 0, len(candidate.machineByRecipe))
 	totalPowerKW := 0.0
 	grossOutputsByName := make(map[string]float64)
 	grossInputsByName := make(map[string]float64)
-	for recipeID, machineCount := range machineByRecipeID {
+	for recipeID, machineCount := range candidate.machineByRecipe {
 		if machineCount <= 0 {
 			continue
 		}
@@ -377,7 +597,7 @@ func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, str
 
 	externalInputs := make([]requirementMaterialAmount, 0)
 	unresolvedCraftables := make([]requirementMaterialAmount, 0)
-	for name, need := range requirement {
+	for name, need := range candidate.requirement {
 		if need <= requirementEPS {
 			continue
 		}
@@ -409,4 +629,10 @@ func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, str
 		TotalExternalInputs:  totalExternalInputs,
 		Warnings:             warnings,
 	}
+}
+
+func calculateRequirementPlan(targets []requirementTarget, recipes []recipe, strategy string) requirementPlanResult {
+	optionsByMaterial := buildRequirementOptionsByMaterial(recipes)
+	best := optimizeByproductCandidates(targets, recipes, strategy)
+	return summarizeCandidate(best, recipes, optionsByMaterial)
 }
